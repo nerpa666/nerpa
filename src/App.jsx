@@ -137,9 +137,6 @@ function Login({ onLogin, err }) {
         <Field label="Код доступу"><input type="password" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={inp} placeholder="••••" /></Field>
         {err && <div style={{ color: "#dc2626", fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
         <button onClick={submit} style={{ ...btnPrimary, width: "100%", marginTop: 4 }}>Увійти</button>
-        <div style={{ marginTop: 20, padding: 12, background: "#fafafa", borderRadius: 8, fontSize: 11.5, color: "#999", lineHeight: 1.7 }}>
-          Тестові доступи:<br /><b>Slava / admin</b> — адмін<br /><b>FPV / 1111</b> — заявник<br /><b>N1 / 7777</b> — виконавець
-        </div>
       </div>
     </div>
   );
