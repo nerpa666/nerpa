@@ -65,6 +65,8 @@ export default function App() {
   const [tab, setTab] = useState("");
   const [editingReq, setEditingReq] = useState(null);
   const [err, setErr] = useState("");
+  const [dailyLimit, setDailyLimit] = useState(5);
+  const [presetDate, setPresetDate] = useState("");
 
   // відновлення сесії з localStorage (лише ідентифікація користувача, не дані)
   useEffect(() => {
@@ -75,8 +77,10 @@ export default function App() {
   const loadData = useCallback(async () => {
     const { data: rq } = await supabase.from("requests").select("*").order("created_at", { ascending: false });
     const { data: ms } = await supabase.from("missions").select("*").order("planned_start", { ascending: false });
+    const { data: st } = await supabase.from("settings").select("*").eq("key", "daily_limit").maybeSingle();
     if (rq) setRequests(rq.map(reqFromDb));
     if (ms) setMissions(ms.map(misFromDb));
+    if (st) setDailyLimit(parseInt(st.value) || 5);
     setLoading(false);
   }, []);
 
@@ -110,11 +114,17 @@ export default function App() {
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 24px 60px" }}>
         {user.role === "requester" && (
           tab === "new"
-            ? <NewRequest user={user} editing={editingReq} reload={loadData} onDone={() => { setTab("board"); setEditingReq(null); }} />
+            ? <NewRequest user={user} editing={editingReq} requests={requests} dailyLimit={dailyLimit} presetDate={presetDate} reload={loadData} onDone={() => { setTab("board"); setEditingReq(null); setPresetDate(""); }} />
+            : tab === "calendar"
+            ? <div><SectionTitle>Календар заявок</SectionTitle><WeekCalendar requests={requests} dailyLimit={dailyLimit} mode="requester" currentUser={user.name} onAddForDay={(d) => { setEditingReq(null); setPresetDate(d); setTab("new"); }} /></div>
             : <RequesterBoard user={user} requests={requests} reload={loadData} onEdit={(r) => { setEditingReq(r); setTab("new"); }} />
         )}
-        {user.role === "executor" && <ExecutorView user={user} missions={missions} requests={requests} reload={loadData} tab={tab} />}
-        {user.role === "admin" && <AdminView tab={tab} requests={requests} missions={missions} />}
+        {user.role === "executor" && (
+          tab === "calendar"
+            ? <div><SectionTitle>Календар заявок (огляд)</SectionTitle><WeekCalendar requests={requests} dailyLimit={dailyLimit} mode="view" /></div>
+            : <ExecutorView user={user} missions={missions} requests={requests} reload={loadData} tab={tab} />
+        )}
+        {user.role === "admin" && <AdminView tab={tab} requests={requests} missions={missions} dailyLimit={dailyLimit} reload={loadData} />}
       </div>
     </div>
   );
@@ -145,10 +155,10 @@ function Login({ onLogin, err }) {
 // ───────── Хедер ─────────
 function Header({ user, onLogout, tab, setTab }) {
   const tabs = user.role === "admin"
-    ? [["overview", "Огляд"], ["timeline", "Таймлайн"], ["metrics", "Метрики"], ["requests", "Заявки"], ["missions", "Місії"]]
+    ? [["overview", "Огляд"], ["calendar", "Календар"], ["timeline", "Таймлайн"], ["metrics", "Метрики"], ["requests", "Заявки"], ["missions", "Місії"], ["settings", "Налаштування"]]
     : user.role === "executor"
-    ? [["create", "+ Сформувати місію"], ["mine", "Мої місії"]]
-    : [["board", "Мої заявки"], ["new", "+ Нова заявка"]];
+    ? [["create", "+ Сформувати місію"], ["calendar", "Календар"], ["mine", "Мої місії"]]
+    : [["board", "Мої заявки"], ["calendar", "Календар"], ["new", "+ Нова заявка"]];
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #ececec" }}>
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
@@ -218,7 +228,7 @@ function RequestCard({ req, onEdit, onDelete }) {
   );
 }
 
-function NewRequest({ user, reload, onDone, editing }) {
+function NewRequest({ user, reload, onDone, editing, requests, dailyLimit, presetDate }) {
   const [mission, setMission] = useState(editing?.mission || MISSION_TYPES[0]);
   const [priority, setPriority] = useState(editing?.priority || PRIORITIES[0]);
   const [cargoTypes, setCargoTypes] = useState(editing?.cargoTypes || [CARGO_TYPES[0]]);
@@ -226,12 +236,17 @@ function NewRequest({ user, reload, onDone, editing }) {
   const [size, setSize] = useState(editing?.size || SIZES[0]);
   const [position, setPosition] = useState(editing?.position || "");
   const [description, setDescription] = useState(editing?.description || "");
-  const [datetime, setDatetime] = useState(editing?.datetime || "");
+  const [datetime, setDatetime] = useState(editing?.datetime || presetDate || "");
   const [saving, setSaving] = useState(false);
 
   const toggleCargo = (c) => setCargoTypes((p) => (p.includes(c) ? p.filter((x) => x !== c) : [...p, c]));
   const submit = async () => {
     if (cargoTypes.length === 0 || saving) return;
+    // попередження, якщо обраний день уже заповнений (але дозволяємо)
+    if (datetime) {
+      const taken = (requests || []).filter((r) => r.datetime === datetime && r.status !== "cancelled" && (!editing || r.id !== editing.id)).length;
+      if (taken >= dailyLimit && !confirm(`На ${dayLabel(datetime)} вже ${taken} заявок (ліміт ${dailyLimit}). Все одно створити?`)) return;
+    }
     setSaving(true);
     const data = { mission, priority, cargoTypes, weight: weight.trim(), size, position: position.trim(), description: description.trim(), datetime };
     if (editing) {
@@ -261,7 +276,24 @@ function NewRequest({ user, reload, onDone, editing }) {
         <Field label="Габарит"><select value={size} onChange={(e) => setSize(e.target.value)} style={inp}>{SIZES.map((s) => <option key={s}>{s}</option>)}</select></Field>
       </div>
       <Field label="Позиція доставки"><input value={position} onChange={(e) => setPosition(e.target.value)} style={inp} placeholder="Координати / орієнтир / позивний точки" /></Field>
-      <Field label="Бажана дата"><input type="date" value={datetime} onChange={(e) => setDatetime(e.target.value)} style={inp} /></Field>
+      <Field label="Бажана дата">
+        <input type="date" value={datetime} onChange={(e) => setDatetime(e.target.value)} style={inp} />
+        {datetime && (() => {
+          // рахуємо вже наявні заявки на цей день (крім поточної редагованої)
+          const taken = (requests || []).filter((r) => r.datetime === datetime && r.status !== "cancelled" && (!editing || r.id !== editing.id)).length;
+          const full = taken >= dailyLimit;
+          return (
+            <div style={{ marginTop: 6, fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ flex: 1, height: 6, background: "#f0f0f0", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(100, (taken / dailyLimit) * 100)}%`, height: "100%", background: full ? "#dc2626" : taken / dailyLimit >= 0.7 ? "#d97706" : "#16a34a" }} />
+              </div>
+              <span style={{ color: full ? "#dc2626" : "#666", fontWeight: 600, whiteSpace: "nowrap" }}>
+                зайнято {taken} з {dailyLimit}{full ? " · день повний" : ""}
+              </span>
+            </div>
+          );
+        })()}
+      </Field>
       <Field label="Опис (необовʼязково)"><textarea value={description} onChange={(e) => setDescription(e.target.value)} style={{ ...inp, minHeight: 70, resize: "vertical" }} placeholder="Додаткові деталі завдання…" /></Field>
       <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
         <button onClick={submit} disabled={cargoTypes.length === 0 || saving} style={{ ...btnPrimary, opacity: (cargoTypes.length === 0 || saving) ? 0.5 : 1 }}>{saving ? "Збереження…" : editing ? "Зберегти зміни" : "Створити заявку"}</button>
@@ -405,15 +437,50 @@ function MissionCardExec({ m, reqById, onReport, onSaveEdit }) {
 }
 
 // ═══════════ АДМІН ═══════════
-function AdminView({ tab, requests, missions }) {
+function AdminView({ tab, requests, missions, dailyLimit, reload }) {
+  if (tab === "calendar") return <div><SectionTitle>Календар заявок (огляд)</SectionTitle><WeekCalendar requests={requests} dailyLimit={dailyLimit} mode="view" /></div>;
   if (tab === "timeline") return <AdminTimeline missions={missions} requests={requests} />;
   if (tab === "metrics") return <AdminMetrics missions={missions} requests={requests} />;
   if (tab === "requests") return <AdminRequests requests={requests} />;
   if (tab === "missions") return <AdminMissions missions={missions} requests={requests} />;
-  return <AdminOverview requests={requests} missions={missions} />;
+  if (tab === "settings") return <AdminSettings dailyLimit={dailyLimit} reload={reload} />;
+  return <AdminOverview requests={requests} missions={missions} dailyLimit={dailyLimit} />;
 }
 
-function AdminOverview({ requests, missions }) {
+// Налаштування (адмін): денний ліміт заявок
+function AdminSettings({ dailyLimit, reload }) {
+  const [val, setVal] = useState(dailyLimit);
+  const [saved, setSaved] = useState(false);
+  const save = async () => {
+    await supabase.from("settings").upsert({ key: "daily_limit", value: String(val) });
+    await reload();
+    setSaved(true); setTimeout(() => setSaved(false), 2000);
+  };
+  return (
+    <div>
+      <SectionTitle>Налаштування</SectionTitle>
+      <div style={{ ...card, padding: 24, maxWidth: 460 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Денний ліміт заявок</div>
+        <div style={{ fontSize: 12.5, color: "#888", marginBottom: 16 }}>Скільки заявок підрозділ потягне за один день. Заявники бачитимуть завантаженість дня при створенні.</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button key={n} onClick={() => setVal(n)} style={{
+              width: 44, height: 44, borderRadius: 10, fontSize: 16, fontWeight: 700, cursor: "pointer",
+              border: val === n ? "1px solid #16a34a" : "1px solid #e2e2e2",
+              background: val === n ? "#16a34a" : "#fff", color: val === n ? "#fff" : "#555",
+            }}>{n}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={save} style={btnPrimary}>Зберегти</button>
+          {saved && <span style={{ color: "#16a34a", fontSize: 13 }}>✓ Збережено</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminOverview({ requests, missions, dailyLimit }) {
   const loadByDay = useMemo(() => {
     const acc = {};
     requests.filter((r) => r.status === "new" || r.status === "planned").forEach((r) => { const k = r.datetime || "Без дати"; if (!acc[k]) acc[k] = { count: 0, weight: 0 }; acc[k].count += 1; acc[k].weight += parseWeight(r.weight); });
@@ -438,7 +505,7 @@ function AdminOverview({ requests, missions }) {
             {Object.entries(loadByDay).sort((a, b) => (a[0] > b[0] ? 1 : -1)).map(([k, v]) => (
               <div key={k}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 500, color: "#444" }}>{k === "Без дати" ? k : dayLabel(k)} · {v.count} заявок</span>
+                  <span style={{ fontWeight: 500, color: v.count > dailyLimit ? "#dc2626" : "#444" }}>{k === "Без дати" ? k : dayLabel(k)} · {v.count}/{dailyLimit} заявок{v.count > dailyLimit ? " · перевищено" : ""}</span>
                   <span style={{ color: "#666", fontWeight: 600 }}>{v.weight ? `${v.weight} кг` : "—"}</span>
                 </div>
                 <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}><div style={{ width: `${(v.weight / maxW) * 100}%`, height: "100%", background: "#86efac", borderRadius: 4 }} /></div>
@@ -692,6 +759,88 @@ function AdminMissions({ missions, requests }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ───────── Тижневий календар (універсальний для ролей) ─────────
+// mode: "requester" (можна додавати) | "view" (лише огляд)
+function WeekCalendar({ requests, dailyLimit, mode, onAddForDay, currentUser }) {
+  const today = new Date();
+  const startOfWeek = (d) => { const x = new Date(d); const wd = (x.getDay() + 6) % 7; x.setDate(x.getDate() - wd); x.setHours(0, 0, 0, 0); return x; };
+  const [weekStart, setWeekStart] = useState(startOfWeek(today));
+  const [selectedDay, setSelectedDay] = useState(null);
+  const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
+  const dk = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d; });
+  const active = (r) => r.status !== "cancelled";
+  const takenOn = (key) => requests.filter((r) => r.datetime === key && active(r)).length;
+  const onDay = (key) => requests.filter((r) => r.datetime === key && active(r));
+  const shiftWeek = (n) => { const d = new Date(weekStart); d.setDate(d.getDate() + n * 7); setWeekStart(d); setSelectedDay(null); };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <button onClick={() => shiftWeek(-1)} style={btnGhost}>← Тиждень</button>
+        <span style={{ fontWeight: 700, fontSize: 14 }}>{days[0].getDate()}.{String(days[0].getMonth() + 1).padStart(2, "0")} – {days[6].getDate()}.{String(days[6].getMonth() + 1).padStart(2, "0")}</span>
+        <button onClick={() => shiftWeek(1)} style={btnGhost}>Тиждень →</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
+        {days.map((d, i) => {
+          const key = dk(d);
+          const cnt = takenOn(key);
+          const full = cnt >= dailyLimit;
+          const isToday = key === dk(today);
+          const isSel = key === selectedDay;
+          const barColor = cnt === 0 ? "#e8e8e8" : full ? "#dc2626" : cnt / dailyLimit >= 0.7 ? "#d97706" : "#16a34a";
+          return (
+            <div key={key} onClick={() => setSelectedDay(isSel ? null : key)} style={{
+              ...card, padding: "10px 8px", cursor: "pointer", textAlign: "center",
+              border: isSel ? "1.5px solid #16a34a" : isToday ? "1.5px solid #c7d2fe" : "1px solid #ececec",
+              background: isSel ? "#f0fdf4" : "#fff",
+            }}>
+              <div style={{ fontSize: 10.5, color: "#999", marginBottom: 2 }}>{WD[i]}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: isToday ? "#4f46e5" : "#1a1a1a" }}>{d.getDate()}</div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
+                {Array.from({ length: dailyLimit }, (_, k) => <span key={k} style={{ width: 6, height: 6, borderRadius: "50%", background: k < cnt ? barColor : "#eee" }} />)}
+              </div>
+              <div style={{ fontSize: 10, color: full ? "#dc2626" : "#aaa", marginTop: 4, fontWeight: full ? 700 : 400 }}>{cnt}/{dailyLimit}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {selectedDay && (
+        <div style={{ ...card, padding: 18, marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>{selectedDay.split("-").reverse().join(".")} · {takenOn(selectedDay)}/{dailyLimit} заявок</span>
+            <button onClick={() => setSelectedDay(null)} style={{ ...btnGhost, padding: "2px 8px", fontSize: 16 }}>×</button>
+          </div>
+          {onDay(selectedDay).length === 0 ? (
+            <div style={{ fontSize: 13, color: "#aaa", marginBottom: mode === "requester" ? 12 : 0 }}>На цей день немає заявок.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: mode === "requester" ? 12 : 0 }}>
+              {onDay(selectedDay).map((r) => {
+                const s = REQ_STATUS[r.status] || REQ_STATUS.new;
+                return (
+                  <div key={r.id} style={{ padding: "8px 12px", background: "#fafafa", borderRadius: 8, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span><b>{r.mission}</b> · {(r.cargoTypes || []).join(" + ")}{r.weight ? ` · ${r.weight}` : ""}{r.position ? ` · 📍 ${r.position}` : ""} <span style={{ color: "#aaa" }}>— {r.author}</span></span>
+                    <span style={{ ...pill, background: s.bg, color: s.color, whiteSpace: "nowrap" }}>{s.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {mode === "requester" && (
+            <>
+              {takenOn(selectedDay) >= dailyLimit && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>⚠ День заповнений (ліміт {dailyLimit}). Додати все одно можна.</div>}
+              <button onClick={() => onAddForDay(selectedDay)} style={btnPrimary}>+ Додати заявку на цей день</button>
+            </>
+          )}
+        </div>
+      )}
+      {!selectedDay && <div style={{ fontSize: 12.5, color: "#aaa", marginTop: 14, textAlign: "center" }}>Клікни на день, щоб {mode === "requester" ? "переглянути заявки та додати нову" : "переглянути заявки дня"}.</div>}
     </div>
   );
 }
