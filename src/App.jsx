@@ -825,7 +825,7 @@ function WeekCalendar({ requests, dailyLimit, mode, onAddForDay, currentUser }) 
                 const s = REQ_STATUS[r.status] || REQ_STATUS.new;
                 return (
                   <div key={r.id} style={{ padding: "8px 12px", background: "#fafafa", borderRadius: 8, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <span><b>{r.mission}</b> · {(r.cargoTypes || []).join(" + ")}{r.weight ? ` · ${r.weight}` : ""}{r.position ? ` · 📍 ${r.position}` : ""} <span style={{ color: "#aaa" }}>— {r.author}</span></span>
+                    <span><b>{r.mission}</b>{r.position ? ` · 📍 ${r.position}` : ""} · {(r.cargoTypes || []).join(" + ")}{r.weight ? ` · ${r.weight}` : ""} <span style={{ color: "#aaa" }}>— {r.author}</span></span>
                     <span style={{ ...pill, background: s.bg, color: s.color, whiteSpace: "nowrap" }}>{s.label}</span>
                   </div>
                 );
